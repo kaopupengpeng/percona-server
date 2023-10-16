@@ -1239,7 +1239,7 @@ Events::load_events_from_db(THD *thd)
 end:
   end_read_record(&read_record_info);
 
-  close_mysql_tables(thd);
+  close_trans_system_tables(thd);
   DBUG_RETURN(ret);
 }
 

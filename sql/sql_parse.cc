@@ -4686,7 +4686,11 @@ end_with_restore_list:
               statement.
       */
       assert(thd->get_transaction()->is_empty(Transaction_ctx::STMT));
-      close_thread_tables(thd);
+      // trans_commit_stmt(thd);
+      // if (!trans_commit(thd)) {
+        close_thread_tables(thd);
+      //   thd->mdl_context.release_transactional_locks();
+      // }
       /*
         Check if invoker exists on slave, then use invoker privilege to
         insert routine privileges to mysql.procs_priv. If invoker is not
@@ -4976,7 +4980,20 @@ end_with_restore_list:
               statement.
       */
       assert(thd->get_transaction()->is_empty(Transaction_ctx::STMT));
-      close_thread_tables(thd);
+      // if (sp_result == SP_OK) {
+      //   trans_commit_stmt(thd);
+      //   if (!trans_commit(thd)) {
+          close_thread_tables(thd);
+      //     thd->mdl_context.release_transactional_locks();
+      //   }
+      // } else {
+      //   trans_rollback_stmt(thd);
+      //   if (!trans_rollback(thd)) {
+      //     close_thread_tables(thd);
+      //     if (!thd->locked_tables_mode)
+      //       thd->mdl_context.release_transactional_locks();
+      //   }
+      // }
 
       if (sp_result != SP_KEY_NOT_FOUND &&
           sp_automatic_privileges && !opt_noacl &&

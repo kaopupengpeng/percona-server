@@ -10776,6 +10776,98 @@ open_nontrans_system_tables_for_read(THD *thd, TABLE_LIST *table_list,
   DBUG_RETURN(false);
 }
 
+/**
+  Open and lock transactional system tables for update.
+
+  One must call close_trans_system_tables() to close systems tables opened
+  with this call.
+
+  @param thd        Thread context.
+  @param table_list List of tables to open.
+
+  @note THR_LOCK deadlocks are not possible here because of the
+  restrictions we put on opening and locking of system tables for writing.
+  Thus, the system tables can be opened and locked for updating even if some
+  other tables have already been opened and locked.
+
+  @note MDL-deadlocks are possible, but they are properly detected and
+  reported.
+
+  @note Row-level deadlocks should be either avoided altogether using
+  non-locking updates (as it is done now for InnoDB), or should be correctly
+  detected and reported (in case of other transactional SE).
+
+  @note It is now technically possible to open non-transactional tables
+  (MyISAM system tables) using this function. That situation might still happen
+  if the user run the server on the elder data-directory or manually alters the
+  system tables to reside in MyISAM instead of InnoDB. It will be forbidden in
+  the future.
+
+  @return Error status.
+*/
+
+bool open_trans_system_tables_for_update(THD *thd, TABLE_LIST *table_list)
+{
+  uint counter;
+  uint flags= MYSQL_OPEN_IGNORE_FLUSH | MYSQL_LOCK_IGNORE_TIMEOUT;
+
+  DBUG_ENTER("open_trans_system_tables_for_update");
+
+  assert(!thd->is_attachable_rw_transaction_active());
+
+  // Begin attachable transaction.
+
+  thd->begin_attachable_rw_transaction();
+
+  // Open tables.
+
+  if (open_tables(thd, &table_list, &counter, flags))
+  {
+    thd->end_attachable_transaction();
+    DBUG_RETURN(true);
+  }
+
+  // Check the tables.
+
+  for (TABLE_LIST *t= table_list; t; t= t->next_global)
+  {
+    // Ensure the t are in storage engines, which are compatible with the
+    // attachable transaction requirements.
+
+    if ((t->table->file->ha_table_flags() & HA_ATTACHABLE_TRX_COMPATIBLE) == 0)
+    {
+      // Crash in the debug build ...
+      assert(!"HA_ATTACHABLE_TRX_COMPATIBLE is not set");
+
+      // ... or report an error in the release build.
+      my_error(ER_UNKNOWN_ERROR, MYF(0));
+      thd->end_attachable_transaction();
+      DBUG_RETURN(true);
+    }
+
+    // The table should be in a transaction SE. This is not strict requirement
+    // however. It will be make more strict in the future.
+
+    if (!t->table->file->has_transactions())
+      sql_print_warning("System table '%.*s' is expected to be transactional.",
+                        static_cast<int>(t->table_name_length), t->table_name);
+  }
+
+  // Lock the tables.
+
+  if (lock_tables(thd, table_list, counter, flags))
+  {
+    thd->end_attachable_transaction();
+    DBUG_RETURN(true);
+  }
+
+  // Mark the table columns for use.
+
+  for (TABLE_LIST *tables= table_list; tables; tables= tables->next_global)
+    tables->table->use_all_columns();
+
+  DBUG_RETURN(false);
+}
 
 /**
   Open and lock transactional system tables for read.

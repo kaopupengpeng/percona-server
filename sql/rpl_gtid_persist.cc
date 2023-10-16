@@ -63,12 +63,12 @@ public:
   }
   ~Attachable_trx_rw()
   {
-    /* The attachable transaction has been already committed */
-    assert(!m_thd->get_transaction()->is_active(Transaction_ctx::STMT)
-           && !m_thd->get_transaction()->is_active(Transaction_ctx::SESSION));
+    // /* The attachable transaction has been already committed */
+    // assert(!m_thd->get_transaction()->is_active(Transaction_ctx::STMT)
+    //        && !m_thd->get_transaction()->is_active(Transaction_ctx::SESSION));
 
-    m_thd->get_transaction()->xid_state()->set_state(m_xa_state_saved);
-    m_thd->tx_read_only= true;
+    // m_thd->get_transaction()->xid_state()->set_state(m_xa_state_saved);
+    // m_thd->tx_read_only= true;
   }
 
 private:

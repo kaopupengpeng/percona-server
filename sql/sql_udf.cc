@@ -182,7 +182,7 @@ void udf_init()
 
   tables.init_one_table(db, sizeof(db)-1, "func", 4, "func", TL_READ);
 
-  if (open_and_lock_tables(new_thd, &tables, MYSQL_LOCK_IGNORE_TIMEOUT))
+  if (open_trans_system_tables_for_read(new_thd, &tables))
   {
     DBUG_PRINT("error",("Can't open udf table"));
     sql_print_error("Can't open the mysql.func table. Please "
@@ -283,7 +283,7 @@ void udf_init()
   table->m_needs_reopen= TRUE;                  // Force close to free memory
 
 end:
-  close_mysql_tables(new_thd);
+  close_trans_system_tables(new_thd);
   delete new_thd;
   DBUG_VOID_RETURN;
 }
@@ -487,8 +487,10 @@ int mysql_create_function(THD *thd,udf_func *udf)
   }
 
   tables.init_one_table("mysql", 5, "func", 4, "func", TL_WRITE);
-  if (!(table= open_ltable(thd, &tables, TL_WRITE, MYSQL_LOCK_IGNORE_TIMEOUT)))
+  if (open_trans_system_tables_for_update(thd, &tables)) 
     DBUG_RETURN(1);
+  
+  table = tables.table;
 
   /* 
     Turn off row binlogging of this statement and use statement-based 
@@ -501,6 +503,7 @@ int mysql_create_function(THD *thd,udf_func *udf)
   if ((my_hash_search(&udf_hash,(uchar*) udf->name.str, udf->name.length)))
   {
     my_error(ER_UDF_EXISTS, MYF(0), udf->name.str);
+    close_trans_system_tables(thd);
     goto err;
   }
   if (!(dl = find_udf_dl(udf->dl)))
@@ -519,6 +522,7 @@ int mysql_create_function(THD *thd,udf_func *udf)
                           udf->dl, error_number, errmsg));
       my_error(ER_CANT_OPEN_LIBRARY, MYF(0),
                udf->dl, error_number, errmsg);
+      close_trans_system_tables(thd);
       goto err;
     }
     new_dl=1;
@@ -529,6 +533,7 @@ int mysql_create_function(THD *thd,udf_func *udf)
     if ((missing= init_syms(udf, buf)))
     {
       my_error(ER_CANT_FIND_DL_ENTRY, MYF(0), missing);
+      close_trans_system_tables(thd);
       goto err;
     }
   }
@@ -560,6 +565,7 @@ int mysql_create_function(THD *thd,udf_func *udf)
     my_error(ER_ERROR_ON_WRITE, MYF(0), "mysql.func", error,
              my_strerror(errbuf, sizeof(errbuf), error));
     del_udf(u_d);
+    close_trans_system_tables(thd);
     goto err;
   }
   mysql_rwlock_unlock(&THR_LOCK_udf);
@@ -612,8 +618,10 @@ int mysql_drop_function(THD *thd,const LEX_STRING *udf_name)
   }
 
   tables.init_one_table("mysql", 5, "func", 4, "func", TL_WRITE);
-  if (!(table= open_ltable(thd, &tables, TL_WRITE, MYSQL_LOCK_IGNORE_TIMEOUT)))
+  if (open_trans_system_tables_for_update(thd, &tables)) 
     DBUG_RETURN(1);
+  
+  table = tables.table;
 
   /* 
     Turn off row binlogging of this statement and use statement-based
@@ -628,6 +636,7 @@ int mysql_drop_function(THD *thd,const LEX_STRING *udf_name)
   {
     my_error(ER_FUNCTION_NOT_DEFINED, MYF(0), udf_name->str);
     mysql_rwlock_unlock(&THR_LOCK_udf);
+    close_trans_system_tables(thd);
     goto exit;
   }
   exact_name_str= udf->name.str;
@@ -652,6 +661,8 @@ int mysql_drop_function(THD *thd,const LEX_STRING *udf_name)
     if ((delete_err = table->file->ha_delete_row(table->record[0])))
       table->file->print_error(delete_err, MYF(0));
   }
+
+  close_trans_system_tables(thd);
 
   /*
     Binlog the drop function. Keep the table open and locked

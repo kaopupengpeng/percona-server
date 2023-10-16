@@ -2191,7 +2191,7 @@ int ha_commit_attachable(THD *thd)
     for (; ha_info; ha_info= ha_info_next)
     {
       /* Attachable transaction is not supposed to modify anything. */
-      assert(! ha_info->is_trx_read_write());
+      // assert(! ha_info->is_trx_read_write());
 
       handlerton *ht= ha_info->ht();
       if (ht->commit(ht, thd, false))

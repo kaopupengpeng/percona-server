@@ -39,6 +39,7 @@
 #include "sql_parse.h"    // parse_sql
 #include "sql_show.h"     // append_identifier
 #include "sql_table.h"    // write_bin_log
+#include "transaction.h"
 
 /* Used in error handling only */
 #define SP_TYPE_STRING(LP) \
@@ -427,6 +428,46 @@ my_bool Proc_table_intact::check_proc_table(TABLE *table)
 static Proc_table_intact proc_table_intact;
 
 
+static bool proc_end_trans_and_close_tables(THD *thd, bool rollback_transaction)
+{
+  bool result;
+
+  /*
+    Try to commit a transaction even if we had some failures.
+
+    Without this step changes to privilege tables will be rolled back at the
+    end of mysql_execute_command() in the presence of error, leaving on-disk
+    and in-memory descriptions of privileges out of sync and making behavior
+    of ACL statements for transactional tables incompatible with legacy
+    behavior.
+
+    We need to commit both statement and normal transaction to make behavior
+    consistent with both autocommit on and off.
+
+    It is safe to do so since ACL statement always do implicit commit at the
+    end of statement.
+  */
+  // assert(stmt_causes_implicit_commit(thd, CF_IMPLICIT_COMMIT_END));
+
+  // if (rollback_transaction)
+  // {
+  //   /*
+  //     Transaction rollback request by SE is unlikely. Still let us
+  //     handle it and also do ACL reload if it happens.
+  //   */
+  //   result= trans_rollback_stmt(thd);
+  //   result|= trans_rollback_implicit(thd);
+  // }
+  // else
+  // {
+  //   result= trans_commit_stmt(thd);
+  //   result|= trans_commit_implicit(thd);
+  // }
+  close_trans_system_tables(thd);
+
+  return result;
+}
+
 /**
   Open the mysql.proc table for read.
 
@@ -449,13 +490,14 @@ TABLE *open_proc_table_for_read(THD *thd, Open_tables_backup *backup)
 
   table.init_one_table("mysql", 5, "proc", 4, "proc", TL_READ);
 
-  if (open_nontrans_system_tables_for_read(thd, &table, backup))
+  if (open_trans_system_tables_for_read(thd, &table))
     DBUG_RETURN(NULL);
    
   if(!proc_table_intact.check_proc_table(table.table))
     DBUG_RETURN(table.table);
 
-  close_nontrans_system_tables(thd, backup);
+  proc_end_trans_and_close_tables(thd, true);
+  assert(0);
   DBUG_RETURN(NULL);
 }
 
@@ -478,20 +520,19 @@ static TABLE *open_proc_table_for_update(THD *thd)
 {
   TABLE_LIST table_list;
   TABLE *table;
-  MDL_savepoint mdl_savepoint= thd->mdl_context.mdl_savepoint();
   DBUG_ENTER("open_proc_table_for_update");
 
   table_list.init_one_table("mysql", 5, "proc", 4, "proc", TL_WRITE);
 
-  if (!(table= open_system_table_for_update(thd, &table_list)))
+  if (open_trans_system_tables_for_update(thd, &table_list))
     DBUG_RETURN(NULL);
-
+  
+  table = table_list.table;
   if(!proc_table_intact.check_proc_table(table))
     DBUG_RETURN(table);
 
-  close_thread_tables(thd);
-  thd->mdl_context.rollback_to_savepoint(mdl_savepoint);
-
+  proc_end_trans_and_close_tables(thd, true);
+  assert(0);
   DBUG_RETURN(NULL);
 }
 
@@ -709,7 +750,7 @@ db_find_routine(THD *thd, enum_sp_type type, sp_name *name, sp_head **sphp)
 
   creation_ctx= Stored_routine_creation_ctx::load_from_db(thd, name, table);
 
-  close_nontrans_system_tables(thd, &open_tables_state_backup);
+  proc_end_trans_and_close_tables(thd, false);
   table= 0;
 
   ret= db_load_routine(thd, type, name, sphp,
@@ -722,7 +763,7 @@ db_find_routine(THD *thd, enum_sp_type type, sp_name *name, sp_head **sphp)
   */  
   thd->time_zone_used= saved_time_zone_used;
   if (table)
-    close_nontrans_system_tables(thd, &open_tables_state_backup);
+    proc_end_trans_and_close_tables(thd, ret);
   thd->variables.sql_mode= saved_mode;
   DBUG_RETURN(ret);
 }
@@ -1091,6 +1132,7 @@ bool sp_create_routine(THD *thd, sp_head *sp)
     {
       my_error(ER_SP_STORE_FAILED, MYF(0),
                SP_TYPE_STRING(thd->lex),sp->m_name.str);
+      proc_end_trans_and_close_tables(thd, error);
       goto done;
     }
 
@@ -1100,11 +1142,13 @@ bool sp_create_routine(THD *thd, sp_head *sp)
         table->field[MYSQL_PROC_FIELD_NAME]->char_length())
     {
       my_error(ER_TOO_LONG_IDENT, MYF(0), sp->m_name.str);
+      proc_end_trans_and_close_tables(thd, error);
       goto done;
     }
     if (sp->m_body.length > table->field[MYSQL_PROC_FIELD_BODY]->field_length)
     {
       my_error(ER_TOO_LONG_BODY, MYF(0), sp->m_name.str);
+      proc_end_trans_and_close_tables(thd, error);
       goto done;
     }
 
@@ -1195,12 +1239,14 @@ bool sp_create_routine(THD *thd, sp_head *sp)
 	    access == SP_MODIFIES_SQL_DATA)
 	{
           my_error(ER_BINLOG_UNSAFE_ROUTINE, MYF(0));
+          proc_end_trans_and_close_tables(thd, error);
 	  goto done;
 	}
       }
       if (!(thd->security_context()->check_access(SUPER_ACL)))
       {
         my_error(ER_BINLOG_CREATE_ROUTINE_NEED_SUPER,MYF(0));
+        proc_end_trans_and_close_tables(thd, error);
 	goto done;
       }
     }
@@ -1236,11 +1282,13 @@ bool sp_create_routine(THD *thd, sp_head *sp)
     {
       my_error(ER_USER_COLUMN_OLD_LENGTH, MYF(0),
                table->field[MYSQL_PROC_FIELD_DEFINER]->field_name);
+      proc_end_trans_and_close_tables(thd, error);
       goto done;
     }
     else if (store_failed)
     {
       my_error(ER_CANT_CREATE_SROUTINE, MYF(0), sp->m_name.str);
+      proc_end_trans_and_close_tables(thd, error);
       goto done;
     }
 
@@ -1248,10 +1296,13 @@ bool sp_create_routine(THD *thd, sp_head *sp)
     {
        my_error(ER_SP_ALREADY_EXISTS, MYF(0),
                 SP_TYPE_STRING(thd->lex), sp->m_name.str);
+       proc_end_trans_and_close_tables(thd, error);
        goto done;
     }
 
     sp_cache_invalidate();
+
+    proc_end_trans_and_close_tables(thd, error);
 
     error= false;
     if (mysql_bin_log.is_open())
@@ -1353,6 +1404,8 @@ int sp_drop_routine(THD *thd, enum_sp_type type, sp_name *name)
     if (table->file->ha_delete_row(table->record[0]))
       ret= SP_DELETE_ROW_FAILED;
   }
+
+  proc_end_trans_and_close_tables(thd, ret);
 
   if (ret == SP_OK)
   {
@@ -1487,6 +1540,7 @@ int sp_update_routine(THD *thd, enum_sp_type type, sp_name *name,
     sp_cache_invalidate();
   }
 err:
+  proc_end_trans_and_close_tables(thd, ret);
   /* Restore the state of binlog format */
   assert(!thd->is_current_stmt_binlog_format_row());
   if (save_binlog_row_based)
@@ -1560,7 +1614,7 @@ bool lock_db_routines(THD *thd, const char *db)
   if (nxtres)
   {
     table->file->print_error(nxtres, MYF(0));
-    close_nontrans_system_tables(thd, &open_tables_state_backup);
+    proc_end_trans_and_close_tables(thd, true);
     DBUG_RETURN(true);
   }
 
@@ -1576,7 +1630,7 @@ bool lock_db_routines(THD *thd, const char *db)
       {
         table->file->ha_index_end();
         my_error(ER_SP_WRONG_NAME, MYF(0), "");
-        close_nontrans_system_tables(thd, &open_tables_state_backup);
+        proc_end_trans_and_close_tables(thd, true);
         DBUG_RETURN(true);
       }
 
@@ -1595,10 +1649,10 @@ bool lock_db_routines(THD *thd, const char *db)
   if (nxtres != 0 && nxtres != HA_ERR_END_OF_FILE)
   {
     table->file->print_error(nxtres, MYF(0));
-    close_nontrans_system_tables(thd, &open_tables_state_backup);
+    proc_end_trans_and_close_tables(thd, true);
     DBUG_RETURN(true);
   }
-  close_nontrans_system_tables(thd, &open_tables_state_backup);
+  proc_end_trans_and_close_tables(thd, false);
 
   /* We should already hold a global IX lock and a schema X lock. */
   assert(thd->mdl_context.owns_equal_or_stronger_lock(MDL_key::GLOBAL,

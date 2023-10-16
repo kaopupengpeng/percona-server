@@ -6797,7 +6797,7 @@ err:
   if (proc_table->file->inited)
     (void) proc_table->file->ha_index_end();
   thd->variables.sql_mode= old_sql_mode;
-  close_nontrans_system_tables(thd, &open_tables_state_backup);
+  close_trans_system_tables(thd);
   DBUG_RETURN(res);
 }
 

@@ -329,6 +329,7 @@ bool is_order_deterministic(TABLE_LIST *table,
 /* Functions to work with system tables. */
 bool open_nontrans_system_tables_for_read(THD *thd, TABLE_LIST *table_list,
                                  Open_tables_backup *backup);
+bool open_trans_system_tables_for_update(THD *thd, TABLE_LIST *table_list);
 bool open_trans_system_tables_for_read(THD *thd, TABLE_LIST *table_list);
 void close_nontrans_system_tables(THD *thd, Open_tables_backup *backup);
 void close_trans_system_tables(THD *thd);

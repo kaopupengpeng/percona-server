@@ -4000,7 +4000,17 @@ static bool innobase_is_supported_system_table(const char *db,
 						const char *table_name,
 						bool is_sql_layer_system_table)
 {
-	static const char* supported_system_tables[]= { "help_topic",
+	static const char* supported_system_tables[]= { 
+              "db",
+              "user",
+              "tables_priv",
+              "columns_priv",
+              "procs_priv",
+              "proxies_priv",
+              "proc",
+              "func",
+              "event",
+              "help_topic",
 							"help_category",
 							"help_relation",
 							"help_keyword",

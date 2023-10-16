@@ -173,9 +173,7 @@ row_mysql_is_system_table(
 		return(FALSE);
 	}
 
-	return(0 == strcmp(name + 6, "host")
-	       || 0 == strcmp(name + 6, "user")
-	       || 0 == strcmp(name + 6, "db"));
+	return(0 == strcmp(name + 6, "host"));
 }
 
 /*********************************************************************//**

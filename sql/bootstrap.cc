@@ -258,7 +258,9 @@ static void handle_bootstrap_impl(THD *thd)
       break;
     }
 
+    // sql_print_information("[bootstrap]: %s;", query_copy);
     mysql_parse(thd, &parser_state, true);
+    // sql_print_information("[bootstrap]: execute OK!");
 
     bootstrap_error= thd->is_error();
     thd->send_statement_status();
